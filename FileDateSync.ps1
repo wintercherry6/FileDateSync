@@ -117,11 +117,85 @@ Write-Host "=== FILE DATE SYNC TOOL ===" -ForegroundColor Cyan
 Write-Host "DISCLAIMER: Use at your own risk. Always backup your files!" -ForegroundColor Yellow
 Write-Host ""
 
+function Parse-DateCorrectly {
+    param($dateString)
+    
+    if (-not $dateString -or $dateString.Trim() -eq '') {
+        return $null
+    }
+    
+    # Rimuovi caratteri speciali invisibili
+    $cleanDate = $dateString -replace '[^\d/:\s]', ''
+    $cleanDate = $cleanDate.Trim()
+    
+    if ($cleanDate -eq '') {
+        return $null
+    }
+    
+    Write-Host "  Parsing date: '$cleanDate'" -ForegroundColor Gray
+    
+    # CORREZIONE: Gestione esplicita del formato italiano dd/MM/yyyy
+    if ($cleanDate -match '^(\d{1,2})/(\d{1,2})/(\d{4})') {
+        $potentialDay = $matches[1]
+        $potentialMonth = $matches[2]
+        $year = $matches[3]
+        
+        # CORREZIONE PRINCIPALE: Forza l'interpretazione come dd/MM/yyyy
+        # In italiano il formato è GIORNO/MESE/ANNO
+        $day = $potentialDay.PadLeft(2, '0')
+        $month = $potentialMonth.PadLeft(2, '0')
+        
+        Write-Host "  Detected Italian format: Day=$day, Month=$month, Year=$year" -ForegroundColor Cyan
+        
+        try {
+            # Crea la data in formato ISO che è inequivocabile
+            $isoDate = "$year-$month-$day"
+            $parsedDate = [DateTime]::ParseExact($isoDate, "yyyy-MM-dd", $null)
+            Write-Host "  SUCCESS: Parsed as $parsedDate" -ForegroundColor Green
+            return $parsedDate
+        } catch {
+            Write-Host "  FAILED to parse Italian format" -ForegroundColor Red
+        }
+    }
+    
+    # Se il formato italiano non funziona, prova altri formati
+    $formatsToTry = @(
+        'dd/MM/yyyy HH:mm:ss',
+        'dd/MM/yyyy HH:mm',
+        'dd/MM/yyyy',
+        'yyyy-MM-dd HH:mm:ss',
+        'yyyy-MM-dd HH:mm',
+        'yyyy-MM-dd'
+    )
+    
+    foreach ($format in $formatsToTry) {
+        try {
+            $parsedDate = [DateTime]::ParseExact($cleanDate, $format, $null)
+            Write-Host "  SUCCESS with format '$format': $parsedDate" -ForegroundColor Green
+            return $parsedDate
+        } catch {
+            continue
+        }
+    }
+    
+    # Ultimo tentativo con parsing libero
+    try {
+        $parsedDate = [DateTime]$cleanDate
+        Write-Host "  SUCCESS with free parsing: $parsedDate" -ForegroundColor Green
+        return $parsedDate
+    } catch {
+        Write-Host "  FAILED to parse date: $cleanDate" -ForegroundColor Red
+        return $null
+    }
+}
+
 function Get-OldestDate {
     param($filePath)
     
     $file = Get-Item $filePath
     $dates = @($file.LastWriteTime, $file.CreationTime)
+    
+    Write-Host "File: $($file.Name)" -ForegroundColor White
     
     try {
         $shell = New-Object -ComObject Shell.Application
@@ -130,63 +204,32 @@ function Get-OldestDate {
         
         # Property 12 - Data acquisizione
         $dataAcquisizione = $folder.GetDetailsOf($shellFile, 12)
-        
         if ($dataAcquisizione -and $dataAcquisizione.Trim() -ne '') {
-            # Rimuovi caratteri speciali invisibili
-            $cleanDate = $dataAcquisizione -replace '[^\d/:\s]', ''
-            $cleanDate = $cleanDate.Trim()
-            
-            try {
-                # Prova a convertire direttamente
-                $parsedDate = [DateTime]$cleanDate
+            Write-Host "  Data acquisizione: '$dataAcquisizione'" -ForegroundColor Cyan
+            $parsedDate = Parse-DateCorrectly -dateString $dataAcquisizione
+            if ($parsedDate) {
                 $dates += $parsedDate
-            } catch {
-                # Prova formato italiano specifico dd/MM/yyyy
-                if ($cleanDate -match '(\d{1,2})/(\d{1,2})/(\d{4})') {
-                    $day = $matches[1].PadLeft(2, '0')
-                    $month = $matches[2].PadLeft(2, '0')
-                    $year = $matches[3]
-                    
-                    try {
-                        $parsedDate = Get-Date "$year-$month-$day"
-                        $dates += $parsedDate
-                    } catch {
-                        # Se fallisce, continua senza questa data
-                    }
-                }
             }
         }
         
         # Property 208 - Elemento multimediale creato (Media Created)
         $mediaCreated = $folder.GetDetailsOf($shellFile, 208)
         if ($mediaCreated -and $mediaCreated.Trim() -ne '') {
-            $cleanDate = $mediaCreated -replace '[^\d/:\s]', ''
-            $cleanDate = $cleanDate.Trim()
-            
-            try {
-                $parsedDate = [DateTime]$cleanDate
+            Write-Host "  Media created: '$mediaCreated'" -ForegroundColor Cyan
+            $parsedDate = Parse-DateCorrectly -dateString $mediaCreated
+            if ($parsedDate) {
                 $dates += $parsedDate
-            } catch {
-                if ($cleanDate -match '(\d{1,2})/(\d{1,2})/(\d{4})') {
-                    $day = $matches[1].PadLeft(2, '0')
-                    $month = $matches[2].PadLeft(2, '0')
-                    $year = $matches[3]
-                    
-                    try {
-                        $parsedDate = Get-Date "$year-$month-$day"
-                        $dates += $parsedDate
-                    } catch {
-                        # Se fallisce, continua senza questa data
-                    }
-                }
             }
         }
         
     } catch {
-        # Se ci sono errori nella lettura delle proprietà, continua con le date di base
+        Write-Host "  Error reading properties: $($_.Exception.Message)" -ForegroundColor Red
     }
     
     $oldest = $dates | Sort-Object | Select-Object -First 1
+    Write-Host "  OLDEST DATE: $($oldest.ToString('yyyy-MM-dd'))" -ForegroundColor Yellow
+    Write-Host ""
+    
     return $oldest
 }
 
@@ -234,10 +277,22 @@ foreach ($file in $files) {
     $logEntry = "File: $($file.Name)`n"
     $logEntry += "  Oldest date found: $($oldestDate.ToString('yyyy-MM-dd'))`n"
     
-    # Pattern per file con data esistente
+    # Pattern per file con data esistente - CORREZIONE: controllo se la data attuale è invertita
     if ($nameWithoutExt -match '^(\d{8})_(.+)$') {
         $currentDate = $matches[1]
         $restOfName = $matches[2]
+        
+        # CORREZIONE: Controlla se la data nel nome è invertita (YYYYDDMM invece di YYYYMMDD)
+        $currentYear = $currentDate.Substring(0, 4)
+        $currentMonthDay = $currentDate.Substring(4, 4)
+        
+        # Se il giorno è <= 12, potrebbe essere invertito
+        $potentialDay = $currentDate.Substring(6, 2)
+        $potentialMonth = $currentDate.Substring(4, 2)
+        
+        if ([int]$potentialDay -le 12 -and [int]$potentialMonth -le 12) {
+            Write-Host "  WARNING: Current date might be inverted: $currentDate" -ForegroundColor Yellow
+        }
         
         if ($currentDate -ne $newDate) {
             $newName = "${newDate}_${restOfName}${extension}"
