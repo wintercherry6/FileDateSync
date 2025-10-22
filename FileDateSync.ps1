@@ -99,7 +99,7 @@
     Always backup your files before proceeding!
 
 .AUTHOR
-    wintercherry6 con l'aiuto di DeepSeek
+    wintercherry6 and DeepSeek
 
 .VERSION
     2.0
@@ -358,3 +358,4 @@ Write-Host "Detailed log saved to: $logPath" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "FileDateSync completed successfully!" -ForegroundColor Green
+
